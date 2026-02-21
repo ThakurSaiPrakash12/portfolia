@@ -1,5 +1,6 @@
 import { Renderer, Program, Mesh, Color, Triangle } from 'ogl';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
+import { useTabVisibility } from '../hooks/useTabVisibility';
 import './Galaxy.css';
 
 const vertexShader = `
@@ -170,7 +171,7 @@ void main() {
 }
 `;
 
-export default function Galaxy({
+function Galaxy({
   focal = [0.5, 0.5],
   rotation = [1.0, 0.0],
   starSpeed = 0.5,
@@ -194,14 +195,47 @@ export default function Galaxy({
   const smoothMousePos = useRef({ x: 0.5, y: 0.5 });
   const targetMouseActive = useRef(0.0);
   const smoothMouseActive = useRef(0.0);
+  const [isVisible, setIsVisible] = useState(false);
+  const isTabVisible = useTabVisibility(); // Pause when tab hidden
+  
+  // Refs for proper cleanup
+  const rendererRef = useRef<Renderer | null>(null);
+  const geometryRef = useRef<Triangle | null>(null);
+  const programRef = useRef<Program | null>(null);
+
+  // IntersectionObserver for performance
+  useEffect(() => {
+    const container = ctnDom.current;
+    if (!container) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          setIsVisible(entry.isIntersecting);
+        });
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
-    if (!ctnDom.current) return;
+    if (!ctnDom.current || !isVisible) return;
     const ctn = ctnDom.current;
+    
+    // Detect mobile for performance optimizations
+    const isMobile = window.innerWidth <= 768;
+    
     const renderer = new Renderer({
       alpha: transparent,
-      premultipliedAlpha: false
+      premultipliedAlpha: false,
+      antialias: false,
+      dpr: isMobile ? 1 : Math.min(window.devicePixelRatio, 1.5),
+      powerPreference: 'high-performance' // Critical for performance
     });
+    rendererRef.current = renderer;
     const gl = renderer.gl;
 
     if (transparent) {
@@ -213,22 +247,28 @@ export default function Galaxy({
     }
 
     let program: Program | undefined;
+    let resizeTimeout: number;
 
     function resize() {
-      const scale = 1;
-      renderer.setSize(ctn.offsetWidth * scale, ctn.offsetHeight * scale);
-      if (program) {
-        program.uniforms.uResolution.value = new Color(
-          gl.canvas.width,
-          gl.canvas.height,
-          gl.canvas.width / gl.canvas.height
-        );
-      }
+      clearTimeout(resizeTimeout);
+      resizeTimeout = window.setTimeout(() => {
+        const scale = isMobile ? 0.75 : 1;
+        renderer.setSize(ctn.offsetWidth * scale, ctn.offsetHeight * scale);
+        if (program) {
+          program.uniforms.uResolution.value = new Color(
+            gl.canvas.width,
+            gl.canvas.height,
+            gl.canvas.width / gl.canvas.height
+          );
+        }
+      }, 100) as unknown as number;
     }
-    window.addEventListener('resize', resize, false);
+    window.addEventListener('resize', resize, { passive: true });
     resize();
 
     const geometry = new Triangle(gl);
+    geometryRef.current = geometry; // Store for cleanup
+    
     program = new Program(gl, {
       vertex: vertexShader,
       fragment: fragmentShader,
@@ -257,18 +297,41 @@ export default function Galaxy({
         uTransparent: { value: transparent }
       }
     });
+    programRef.current = program; // Store for cleanup
 
     const mesh = new Mesh(gl, { geometry, program });
     let animateId: number;
+    
+    // FPS limiting
+    const targetFPS = isMobile ? 30 : 60;
+    const frameDelay = 1000 / targetFPS;
+    let lastFrameTime = performance.now();
 
     function update(t: number) {
+      // Only animate if visible AND tab is active
+      if (!isVisible || !isTabVisible) {
+        animateId = requestAnimationFrame(update);
+        return;
+      }
+      
       animateId = requestAnimationFrame(update);
+      
+      // FPS limiting
+      const now = performance.now();
+      const timeSinceLastFrame = now - lastFrameTime;
+      
+      if (timeSinceLastFrame < frameDelay) {
+        return;
+      }
+      
+      lastFrameTime = now - (timeSinceLastFrame % frameDelay);
+      
       if (!disableAnimation && program) {
         program.uniforms.uTime.value = t * 0.001;
         program.uniforms.uStarSpeed.value = (t * 0.001 * starSpeed) / 10.0;
       }
 
-      const lerpFactor = 0.05;
+      const lerpFactor = isMobile ? 0.1 : 0.05; // Less smooth interpolation on mobile for performance
       smoothMousePos.current.x += (targetMousePos.current.x - smoothMousePos.current.x) * lerpFactor;
       smoothMousePos.current.y += (targetMousePos.current.y - smoothMousePos.current.y) * lerpFactor;
 
@@ -282,7 +345,10 @@ export default function Galaxy({
 
       renderer.render({ scene: mesh });
     }
-    animateId = requestAnimationFrame(update);
+    
+    if (isVisible && isTabVisible) {
+      animateId = requestAnimationFrame(update);
+    }
     ctn.appendChild(gl.canvas);
 
     function handleMouseMove(e: MouseEvent) {
@@ -302,17 +368,43 @@ export default function Galaxy({
       ctn.addEventListener('mouseleave', handleMouseLeave);
     }
 
+    // CRITICAL: Proper cleanup
     return () => {
+      clearTimeout(resizeTimeout);
       cancelAnimationFrame(animateId);
       window.removeEventListener('resize', resize);
+      
       if (mouseInteraction) {
         ctn.removeEventListener('mousemove', handleMouseMove);
         ctn.removeEventListener('mouseleave', handleMouseLeave);
       }
-      ctn.removeChild(gl.canvas);
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      
+      // Three.js cleanup
+      if (geometryRef.current) {
+        geometryRef.current = null;
+      }
+      
+      if (programRef.current) {
+        programRef.current = null;
+      }
+      
+      if (rendererRef.current) {
+        const gl = rendererRef.current.gl;
+        
+        // Lose WebGL context
+        const ext = gl.getExtension('WEBGL_lose_context');
+        if (ext) ext.loseContext();
+        
+        rendererRef.current = null;
+      }
+      
+      if (ctn.contains(gl.canvas)) {
+        ctn.removeChild(gl.canvas);
+      }
     };
   }, [
+    isVisible,
+    isTabVisible, // Add tab visibility
     focal,
     rotation,
     starSpeed,
@@ -333,3 +425,6 @@ export default function Galaxy({
 
   return <div ref={ctnDom} className="galaxy-container" {...rest} />;
 }
+
+// Memoize to prevent unnecessary re-renders
+export default memo(Galaxy);

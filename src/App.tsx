@@ -1,24 +1,72 @@
-import { useState, useEffect, lazy, Suspense } from 'react'
+import { useState, useEffect, lazy, Suspense, useMemo, memo } from 'react'
 import './App.css'
-import Particles from './components/Particles'
-import Galaxy from './components/Galaxy'
+import ErrorBoundary from './components/ErrorBoundary'
 
-// Lazy load Hyperspeed for better performance
+// Lazy load heavy components for code splitting
+const Particles = lazy(() => import('./components/Particles'))
+const Galaxy = lazy(() => import('./components/Galaxy'))
 const Hyperspeed = lazy(() => import('./components/Hyperspeed'))
+
+// Loading fallback component
+const LoadingFallback = memo(() => (
+  <div style={{ 
+    width: '100%', 
+    height: '100%', 
+    background: 'transparent' 
+  }} />
+))
+LoadingFallback.displayName = 'LoadingFallback'
+
+// Wrapper for Particles with error handling
+const SafeParticles = memo((props: any) => (
+  <ErrorBoundary fallback={<LoadingFallback />}>
+    <Suspense fallback={<LoadingFallback />}>
+      <Particles {...props} />
+    </Suspense>
+  </ErrorBoundary>
+))
+SafeParticles.displayName = 'SafeParticles'
+
+// Wrapper for Galaxy with error handling  
+const SafeGalaxy = memo((props: any) => (
+  <ErrorBoundary fallback={<LoadingFallback />}>
+    <Suspense fallback={<LoadingFallback />}>
+      <Galaxy {...props} />
+    </Suspense>
+  </ErrorBoundary>
+))
+SafeGalaxy.displayName = 'SafeGalaxy'
 
 function App() {
   const [isScrolled, setIsScrolled] = useState(false)
+  
+  // Memoize device detection and particle count
+  const { isMobile, particleCount } = useMemo(() => {
+    const mobile = window.innerWidth <= 768
+    return {
+      isMobile: mobile,
+      particleCount: mobile ? 20 : 50 // Reduced from 25 to 20 on mobile
+    }
+  }, [])
 
   useEffect(() => {
+    let ticking = false
+    
     const handleScroll = () => {
-      if (window.scrollY > 50) {
-        setIsScrolled(true)
-      } else {
-        setIsScrolled(false)
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          if (window.scrollY > 50) {
+            setIsScrolled(true)
+          } else {
+            setIsScrolled(false)
+          }
+          ticking = false
+        })
+        ticking = true
       }
     }
 
-    window.addEventListener('scroll', handleScroll)
+    window.addEventListener('scroll', handleScroll, { passive: true })
     return () => window.removeEventListener('scroll', handleScroll)
   }, [])
 
@@ -43,7 +91,7 @@ function App() {
           <Hyperspeed
             effectOptions={{
               distortion: 'turbulentDistortion',
-              length: 400,
+              length: isMobile ? 300 : 400,
               roadWidth: 10,
               islandWidth: 2,
               lanesPerRoad: 3,
@@ -51,8 +99,8 @@ function App() {
               fovSpeedUp: 150,
               speedUp: 2,
               carLightsFade: 0.4,
-              totalSideLightSticks: 20,
-              lightPairsPerRoadWay: 40,
+              totalSideLightSticks: isMobile ? 10 : 20,
+              lightPairsPerRoadWay: isMobile ? 20 : 40,
               shoulderLinesWidthPercentage: 0.05,
               brokenLinesWidthPercentage: 0.1,
               brokenLinesLengthPercentage: 0.5,
@@ -92,12 +140,12 @@ function App() {
       {/* About Section */}
       <section className="section about-section" id="about">
         <div className="galaxy-bg about-galaxy">
-          <Galaxy
+          <SafeGalaxy
             glowIntensity={0.25}
             saturation={0.2}
             hueShift={180}
-            density={0.8}
-            speed={0.6}
+            density={isMobile ? 0.5 : 0.8}
+            speed={isMobile ? 0.4 : 0.6}
           />
         </div>
         <div className="section-content">
@@ -125,8 +173,8 @@ Driven by curiosity and continuous learning, I aim to create technology that sol
           {/* Skills Section */}
           <div className="skills-grid">
             <div className="skill-card">
-              <Particles 
-                particleCount={50}
+              <SafeParticles 
+                particleCount={particleCount}
                 particleSpread={3}
                 speed={0.05}
                 particleColors={['#3b82f6', '#60a5fa', '#93c5fd']}
@@ -160,8 +208,8 @@ Driven by curiosity and continuous learning, I aim to create technology that sol
             
             
             <div className="skill-card">
-              <Particles 
-                particleCount={50}
+              <SafeParticles 
+                particleCount={particleCount}
                 particleSpread={3}
                 speed={0.05}
                 particleColors={['#8b5cf6', '#a78bfa', '#c4b5fd']}
@@ -198,8 +246,8 @@ Driven by curiosity and continuous learning, I aim to create technology that sol
             </div>
             
             <div className="skill-card">
-              <Particles 
-                particleCount={50}
+              <SafeParticles 
+                particleCount={particleCount}
                 particleSpread={3}
                 speed={0.05}
                 particleColors={['#06b6d4', '#22d3ee', '#67e8f9']}
@@ -232,8 +280,8 @@ Driven by curiosity and continuous learning, I aim to create technology that sol
             </div>
             
             <div className="skill-card">
-              <Particles 
-                particleCount={50}
+              <SafeParticles 
+                particleCount={particleCount}
                 particleSpread={3}
                 speed={0.05}
                 particleColors={['#10b981', '#34d399', '#6ee7b7']}
@@ -262,8 +310,8 @@ Driven by curiosity and continuous learning, I aim to create technology that sol
             </div>
             
             <div className="skill-card">
-              <Particles 
-                particleCount={50}
+              <SafeParticles 
+                particleCount={particleCount}
                 particleSpread={3}
                 speed={0.05}
                 particleColors={['#f59e0b', '#fbbf24', '#fcd34d']}
@@ -292,8 +340,8 @@ Driven by curiosity and continuous learning, I aim to create technology that sol
             </div>
             
             <div className="skill-card">
-              <Particles 
-                particleCount={50}
+              <SafeParticles 
+                particleCount={particleCount}
                 particleSpread={3}
                 speed={0.05}
                 particleColors={['#ec4899', '#f472b6', '#f9a8d4']}
@@ -335,8 +383,8 @@ Driven by curiosity and continuous learning, I aim to create technology that sol
             glowIntensity={0.25}
             saturation={0.2}
             hueShift={180}
-            density={0.8}
-            speed={0.6}
+            density={isMobile ? 0.5 : 0.8}
+            speed={isMobile ? 0.4 : 0.6}
           />
         </div>
         <div className="section-content">
@@ -458,8 +506,8 @@ Driven by curiosity and continuous learning, I aim to create technology that sol
             glowIntensity={0.25}
             saturation={0.2}
             hueShift={180}
-            density={0.8}
-            speed={0.6}
+            density={isMobile ? 0.5 : 0.8}
+            speed={isMobile ? 0.4 : 0.6}
           />
         </div>
         <div className="section-content">
@@ -486,3 +534,5 @@ Driven by curiosity and continuous learning, I aim to create technology that sol
 }
 
 export default App
+
+

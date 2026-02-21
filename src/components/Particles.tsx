@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import { Renderer, Camera, Geometry, Program, Mesh } from 'ogl';
+import { useTabVisibility } from '../hooks/useTabVisibility';
 
 import './Particles.css';
 
@@ -118,16 +119,46 @@ const Particles = ({
 }: ParticlesProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const mouseRef = useRef({ x: 0, y: 0 });
+  const [isVisible, setIsVisible] = useState(false);
+  const isTabVisible = useTabVisibility(); // Pause when tab hidden
+  
+  // Refs to store Three.js objects for proper cleanup
+  const rendererRef = useRef<Renderer | null>(null);
+  const geometryRef = useRef<Geometry | null>(null);
+  const programRef = useRef<Program | null>(null);
 
+  // IntersectionObserver to only render when visible
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          setIsVisible(entry.isIntersecting);
+        });
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !isVisible) return;
+
+    // High-performance renderer setup
     const renderer = new Renderer({
-      dpr: pixelRatio,
+      dpr: Math.min(pixelRatio, 1.5),
       depth: false,
-      alpha: true
+      alpha: true,
+      antialias: false,
+      powerPreference: 'high-performance' // Critical for mobile
     });
+    rendererRef.current = renderer;
+    
     const gl = renderer.gl;
     container.appendChild(gl.canvas);
     gl.clearColor(0, 0, 0, 0);
@@ -135,13 +166,18 @@ const Particles = ({
     const camera = new Camera(gl, { fov: 15 });
     camera.position.set(0, 0, cameraDistance);
 
+    let resizeTimeout: number;
     const resize = () => {
-      const width = container.clientWidth;
-      const height = container.clientHeight;
-      renderer.setSize(width, height);
-      camera.perspective({ aspect: gl.canvas.width / gl.canvas.height });
+      // Throttle resize for performance
+      clearTimeout(resizeTimeout);
+      resizeTimeout = window.setTimeout(() => {
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+        renderer.setSize(width, height);
+        camera.perspective({ aspect: gl.canvas.width / gl.canvas.height });
+      }, 100) as unknown as number;
     };
-    window.addEventListener('resize', resize, false);
+    window.addEventListener('resize', resize, { passive: true });
     resize();
 
     const handleMouseMove = (e: MouseEvent) => {
@@ -181,6 +217,7 @@ const Particles = ({
       random: { size: 4, data: randoms },
       color: { size: 3, data: colors }
     });
+    geometryRef.current = geometry; // Store for cleanup
 
     const program = new Program(gl, {
       vertex,
@@ -188,22 +225,46 @@ const Particles = ({
       uniforms: {
         uTime: { value: 0 },
         uSpread: { value: particleSpread },
-        uBaseSize: { value: particleBaseSize * pixelRatio },
+        uBaseSize: { value: particleBaseSize * Math.min(pixelRatio, 1.5) },
         uSizeRandomness: { value: sizeRandomness },
         uAlphaParticles: { value: alphaParticles ? 1 : 0 }
       },
       transparent: true,
       depthTest: false
     });
+    programRef.current = program; // Store for cleanup
 
     const particles = new Mesh(gl, { mode: gl.POINTS, geometry, program });
 
     let animationFrameId: number;
     let lastTime = performance.now();
     let elapsed = 0;
+    
+    // FPS limiting - target 30fps on mobile, 60fps on desktop
+    const isMobile = window.innerWidth <= 768;
+    const targetFPS = isMobile ? 30 : 60;
+    const frameDelay = 1000 / targetFPS;
+    let lastFrameTime = performance.now();
 
     const update = (t: number) => {
+      // Critical: Only animate if visible AND tab is active
+      if (!isVisible || !isTabVisible) {
+        animationFrameId = requestAnimationFrame(update);
+        return;
+      }
+      
       animationFrameId = requestAnimationFrame(update);
+      
+      // FPS limiting
+      const now = performance.now();
+      const timeSinceLastFrame = now - lastFrameTime;
+      
+      if (timeSinceLastFrame < frameDelay) {
+        return;
+      }
+      
+      lastFrameTime = now - (timeSinceLastFrame % frameDelay);
+      
       const delta = t - lastTime;
       lastTime = t;
       elapsed += delta * speed;
@@ -227,20 +288,52 @@ const Particles = ({
       renderer.render({ scene: particles, camera });
     };
 
-    animationFrameId = requestAnimationFrame(update);
+    if (isVisible && isTabVisible) {
+      animationFrameId = requestAnimationFrame(update);
+    }
 
+    // CRITICAL: Proper cleanup to prevent memory leaks
     return () => {
+      // Cancel animation frame
+      cancelAnimationFrame(animationFrameId);
+      clearTimeout(resizeTimeout);
+      
+      // Remove event listeners
       window.removeEventListener('resize', resize);
       if (moveParticlesOnHover) {
         container.removeEventListener('mousemove', handleMouseMove);
       }
-      cancelAnimationFrame(animationFrameId);
+      
+      // CRITICAL Three.js cleanup
+      if (geometryRef.current) {
+        geometryRef.current.remove();
+        geometryRef.current = null;
+      }
+      
+      if (programRef.current) {
+        // Cleanup program uniforms
+        programRef.current = null;
+      }
+      
+      if (rendererRef.current) {
+        const gl = rendererRef.current.gl;
+        
+        // Lose WebGL context to free GPU memory
+        const ext = gl.getExtension('WEBGL_lose_context');
+        if (ext) ext.loseContext();
+        
+        rendererRef.current = null;
+      }
+      
+      // Remove canvas from DOM
       if (container.contains(gl.canvas)) {
         container.removeChild(gl.canvas);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    isVisible,
+    isTabVisible, // Add tab visibility as dependency
     particleCount,
     particleSpread,
     speed,
@@ -257,4 +350,5 @@ const Particles = ({
   return <div ref={containerRef} className={`particles-container ${className}`} />;
 };
 
-export default Particles;
+// Memoize to prevent unnecessary re-renders
+export default memo(Particles);
