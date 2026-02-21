@@ -11,8 +11,8 @@ export default defineConfig({
     }),
   ],
   build: {
-    // Minify for production
-    minify: 'terser',
+    // Minify for production (esbuild is faster and built-in)
+    minify: 'esbuild',
     // Optimize chunk size
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
